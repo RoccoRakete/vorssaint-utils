@@ -74,5 +74,29 @@ enum SystemMonitorPlanTests {
         defaults.set(false, forKey: AppFeature.monitorCPU.availabilityKey)
         suite.expect(!monitor.currentPlan(defaults: defaults).needCPUCores,
                      "an uninstalled CPU monitor does not read every core")
+
+        monitor.menuPanelNeeds = SystemMonitorPanelNeeds(power: true)
+        defaults.set(true, forKey: AppFeature.monitorPower.availabilityKey)
+        defaults.set(false, forKey: DefaultsKey.menuBarPeripheralBattery)
+        defaults.set(true, forKey: DefaultsKey.monitorPwrPeripherals)
+        suite.expect(monitor.currentPlan(defaults: defaults).needPeripheralBattery,
+                     "the Power panel reads peripheral batteries with the menu bar option off")
+        defaults.set(false, forKey: DefaultsKey.monitorPwrPeripherals)
+        suite.expect(!monitor.currentPlan(defaults: defaults).needPeripheralBattery,
+                     "hiding the Power panel's peripheral row stops the reads")
+        defaults.set(true, forKey: DefaultsKey.menuBarPeripheralBattery)
+        suite.expect(monitor.currentPlan(defaults: defaults).needPeripheralBattery,
+                     "the menu bar option still reads peripheral batteries on its own")
+        defaults.set(false, forKey: DefaultsKey.menuBarPeripheralBattery)
+        defaults.set(true, forKey: DefaultsKey.monitorPwrPeripherals)
+        monitor.menuPanelNeeds = .none
+        suite.expect(!monitor.currentPlan(defaults: defaults).needPeripheralBattery,
+                     "a closed panel does not read peripheral batteries")
+        monitor.fullMonitorVisible = true
+        suite.expect(monitor.currentPlan(defaults: defaults).needPeripheralBattery,
+                     "the Settings preview reads peripheral batteries for the Power card")
+        defaults.set(false, forKey: DefaultsKey.monitorPwrPeripherals)
+        suite.expect(!monitor.currentPlan(defaults: defaults).needPeripheralBattery,
+                     "the Settings preview honors the hidden peripheral row")
     }
 }

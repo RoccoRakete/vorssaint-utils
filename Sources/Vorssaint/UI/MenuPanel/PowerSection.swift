@@ -14,7 +14,7 @@ struct PowerSection: View {
     @AppStorage(DefaultsKey.monitorGraphPower) private var showGraph = true
     @AppStorage(DefaultsKey.monitorSysBattery) private var showCharge = true
     @AppStorage(DefaultsKey.monitorPwrTemperature) private var showTemperature = true
-    @AppStorage(DefaultsKey.menuBarPeripheralBattery) private var showPeripherals = false
+    @AppStorage(DefaultsKey.monitorPwrPeripherals) private var showPeripherals = true
     @AppStorage(DefaultsKey.monitorGraphBattery) private var graphBattery = true
     @AppStorage(DefaultsKey.temperatureUnit) private var temperatureUnit = TemperatureUnit.celsius.rawValue
     @AppStorage(DefaultsKey.monitorPwrSystem) private var pwrSystem = true
@@ -321,6 +321,7 @@ struct PowerSection: View {
         pwrBattery = true
         pwrTimeRemaining = true
         pwrHealth = true
+        showPeripherals = true
     }
 
     private func adapterCaption(_ power: PowerReading) -> String {

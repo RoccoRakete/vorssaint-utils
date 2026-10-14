@@ -3110,6 +3110,8 @@ enum SwitcherModelFeatureTests {
                "memory menu bar style defaults to percent")
         suite.expect(registeredDefaults[DefaultsKey.monitorPwrTimeRemaining] as? Bool == true,
                "battery time is shown in the Power panel by default")
+        suite.expect(registeredDefaults[DefaultsKey.monitorPwrPeripherals] as? Bool == true,
+               "peripheral batteries are shown in the Power panel by default")
         suite.expect(registeredDefaults[DefaultsKey.windowLayoutShortcutsEnabled] as? Bool == false,
                "window layout shortcuts stay off until enabled")
         suite.expect(registeredDefaults[DefaultsKey.windowEdgeSnapEnabled] as? Bool == false,

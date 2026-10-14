@@ -556,6 +556,7 @@ final class SystemMonitor: ObservableObject {
             || alertBattery
         plan.needPowerDraw = defaults.bool(forKey: DefaultsKey.menuBarPower)
         plan.needPeripheralBattery = menuPanelNeeds.peripheralBattery || notchAccessoryMonitoring
+            || ((fullMonitorVisible || menuPanelNeeds.power) && defaults.bool(forKey: DefaultsKey.monitorPwrPeripherals))
             || defaults.bool(forKey: DefaultsKey.menuBarPeripheralBattery)
         plan.needGPUUsage = panelGPU || defaults.bool(forKey: DefaultsKey.menuBarGPU)
         plan.needCPUTemperature = panelTemps || menuPanelNeeds.cpuTemperature ||

@@ -471,6 +471,7 @@ enum DefaultsKey {
     static let monitorPwrBattery = "monitorPwrBattery"
     static let monitorPwrTimeRemaining = "monitorPwrTimeRemaining"
     static let monitorPwrHealth = "monitorPwrHealth"
+    static let monitorPwrPeripherals = "monitorPwrPeripherals"
     // System monitor — optional notifications for sustained or actionable conditions.
     static let monitorAlertCPU = "monitorAlertCPU"
     static let monitorAlertCPUTemperature = "monitorAlertCPUTemperature"
@@ -1692,6 +1693,7 @@ enum Defaults {
         DefaultsKey.monitorPwrBattery: true,
         DefaultsKey.monitorPwrTimeRemaining: true,
         DefaultsKey.monitorPwrHealth: true,
+        DefaultsKey.monitorPwrPeripherals: true,
         DefaultsKey.monitorAlertCPU: false,
         DefaultsKey.monitorAlertCPUTemperature: false,
         DefaultsKey.monitorAlertBatteryTemperature: false,
