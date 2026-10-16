@@ -112,6 +112,46 @@ enum MouseAppExceptionSupport {
         }
     }
 
+    /// The system surface under the pointer when no app window is there to
+    /// take the wheel: Launchpad and the Dock draw into windows far above the
+    /// app band (the Dock's own measured at layer 20 on this Mac, covering the
+    /// whole screen while Launchpad is open), so `pointerWindow` skips them and
+    /// the frontmost app answers for a surface it has nothing to do with
+    /// (issue #3135). This names the owner so a list entry for it can match.
+    /// It never replaces `pointerWindow`: with an app window under the pointer
+    /// there is no surface to name, and the caller only lets the owner count
+    /// against the list, so nobody who did not list it sees any change.
+    static func pointerSurface(in windows: [Window],
+                               at point: CGPoint,
+                               ownProcessID: Int32) -> Window? {
+        guard pointerWindow(in: windows, at: point, ownProcessID: ownProcessID) == nil else { return nil }
+        return windows.first { window in
+            window.alpha > 0
+                && window.layer > appWindowLayers.upperBound
+                && window.processID != ownProcessID
+                && window.frame.contains(point)
+        }
+    }
+
+    static let dockBundleID = "com.apple.dock"
+    /// Launchpad.app is a stub that launches the grid; the Dock draws it. The
+    /// stub is what people find in the picker, so it names the same surface.
+    static let launchpadBundleID = "com.apple.launchpad.launcher"
+
+    /// Whether the app under the pointer, or failing that the system surface
+    /// under it, is on the list. Both count: the surface adds a way to match,
+    /// it never removes the one that already worked. A Dock-drawn surface
+    /// answers to the Dock and to Launchpad alike.
+    static func isPointerTargetExcepted(appIdentities: [String],
+                                        surfaceIdentities: [String],
+                                        exceptions: Set<String>) -> Bool {
+        if isExcepted(appIdentities, exceptions: exceptions) { return true }
+        let names = surfaceIdentities.contains(dockBundleID)
+            ? surfaceIdentities + [launchpadBundleID]
+            : surfaceIdentities
+        return isExcepted(names, exceptions: exceptions)
+    }
+
     /// Whether the previous answer still applies. A window answers while the
     /// pointer stays inside it; "no window here" only applies while the
     /// pointer has not moved at all, so a wheel over the desktop cannot pin a

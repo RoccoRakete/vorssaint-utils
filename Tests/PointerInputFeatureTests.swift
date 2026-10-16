@@ -3261,6 +3261,64 @@ enum PointerInputFeatureTests {
                 in: [frontWindow], at: CGPoint(x: 380, y: 380), ownProcessID: 9) == nil,
                "a pointer outside every window resolves to nothing")
 
+        // Launchpad is drawn by the Dock into a screen-sized window at layer 20
+        // (issue #3135), which pointerWindow skips on purpose.
+        let dockSurface = MouseAppExceptionSupport.Window(
+            frame: CGRect(x: 0, y: 0, width: 400, height: 400), layer: 20, processID: 11)
+        let dockIdentities: [Int32: String] = [11: "com.apple.dock", 3: "com.example.menubar", 5: "com.example.modeler"]
+        func targetIsExcepted(_ windows: [MouseAppExceptionSupport.Window],
+                              frontmost: String? = "com.example.finder",
+                              exceptions: Set<String>) -> Bool {
+            let appWindow = MouseAppExceptionSupport.pointerWindow(in: windows, at: pointer, ownProcessID: 9)
+            let surface = MouseAppExceptionSupport.pointerSurface(in: windows, at: pointer, ownProcessID: 9)
+            return MouseAppExceptionSupport.isPointerTargetExcepted(
+                appIdentities: (appWindow.map { dockIdentities[$0.processID] } ?? frontmost).map { [$0] } ?? [],
+                surfaceIdentities: surface.flatMap { dockIdentities[$0.processID] }.map { [$0] } ?? [],
+                exceptions: exceptions)
+        }
+        suite.expect(targetIsExcepted([dockSurface], exceptions: ["com.apple.dock"]),
+               "a listed Dock answers for the Launchpad surface under the pointer even while Finder is in front")
+        suite.expect(targetIsExcepted([dockSurface], exceptions: ["com.apple.launchpad.launcher"]),
+               "a listed Launchpad answers for the same Dock-drawn surface")
+        suite.expect(!targetIsExcepted([dockSurface], exceptions: ["com.example.other"]),
+               "a surface nobody listed is not excepted")
+        suite.expect(!targetIsExcepted([dockSurface], exceptions: []),
+               "an empty list never excepts anything, surface or not")
+        suite.expect(!targetIsExcepted([frontWindow, dockSurface], exceptions: ["com.apple.dock"]),
+               "an app window under the pointer still wins over a listed Dock surface beneath it")
+        suite.expect(!targetIsExcepted([dockSurface, frontWindow], exceptions: ["com.apple.dock"]),
+               "with Launchpad's window in front of an app window the app window still answers, as the list is front to back")
+        let overlaySurface = MouseAppExceptionSupport.Window(
+            frame: CGRect(x: 0, y: 0, width: 400, height: 400), layer: 24, processID: 12)
+        let overlayIdentities = dockIdentities.merging([12: "com.example.overlay"]) { $1 }
+        func overlayIsExcepted(_ exceptions: Set<String>) -> Bool {
+            let surface = MouseAppExceptionSupport.pointerSurface(in: [overlaySurface], at: pointer, ownProcessID: 9)
+            return MouseAppExceptionSupport.isPointerTargetExcepted(
+                appIdentities: [],
+                surfaceIdentities: surface.flatMap { overlayIdentities[$0.processID] }.map { [$0] } ?? [],
+                exceptions: exceptions)
+        }
+        suite.expect(!overlayIsExcepted(["com.apple.dock", "com.apple.launchpad.launcher"])
+                && overlayIsExcepted(["com.example.overlay"]),
+               "a non-Dock surface above the app band matches only by its own identity, never as the Dock")
+        suite.expect(targetIsExcepted([frontWindow, dockSurface], exceptions: ["com.example.modeler"]),
+               "the app window's own list entry keeps matching as before")
+        suite.expect(targetIsExcepted([], frontmost: "com.example.finder", exceptions: ["com.example.finder"]),
+               "with no window at all the app in front still answers, exactly as before")
+        suite.expect(MouseAppExceptionSupport.pointerSurface(in: [dockSurface], at: CGPoint(x: 380.5, y: 380.5),
+                                                             ownProcessID: 9) == dockSurface
+                && MouseAppExceptionSupport.pointerSurface(in: [dockSurface], at: CGPoint(x: 500, y: 500),
+                                                           ownProcessID: 9) == nil,
+               "a surface only answers inside its own frame")
+        suite.expect(MouseAppExceptionSupport.pointerSurface(in: [underlayWindow], at: pointer, ownProcessID: 9) == nil
+                && MouseAppExceptionSupport.pointerSurface(
+                    in: [MouseAppExceptionSupport.Window(frame: dockSurface.frame, layer: 20, alpha: 0, processID: 11)],
+                    at: pointer, ownProcessID: 9) == nil
+                && MouseAppExceptionSupport.pointerSurface(
+                    in: [MouseAppExceptionSupport.Window(frame: dockSurface.frame, layer: 20, processID: 9)],
+                    at: pointer, ownProcessID: 9) == nil,
+               "the desktop underlay, an invisible window and Vorssaint's own window are never a surface")
+
         suite.expect(MouseAppExceptionSupport.cacheHolds(region: frontWindow.frame, resolvedPoint: pointer,
                                                    resolvedAt: 10, point: CGPoint(x: 120, y: 120), now: 10.2),
                "a fresh answer keeps serving while the pointer stays inside its window")
@@ -3382,6 +3440,59 @@ enum PointerInputFeatureTests {
                        "an app listed by the path of its file is found among the running apps")
                 exceptions.setSourceTracking(false, for: .smoothScroll)
             }
+        }
+
+        // The wiring in MouseAppExceptions.pointerIdentity, not just the pure
+        // helpers: a stubbed window server and identity table stand in for the
+        // real ones (issue #3135).
+        do {
+            let defaults = UserDefaults.standard
+            let savedArguments = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+            defer { defaults.setVolatileDomain(savedArguments, forName: UserDefaults.argumentDomain) }
+            let point = CGPoint(x: 100, y: 100)
+            let identities: [Int32: String] = [11: "com.apple.dock", 12: "com.example.overlay",
+                                               5: "com.example.modeler"]
+            let dock = MouseAppExceptionSupport.Window(
+                frame: CGRect(x: 0, y: 0, width: 400, height: 400), layer: 20, processID: 11)
+            let overlay = MouseAppExceptionSupport.Window(
+                frame: CGRect(x: 0, y: 0, width: 400, height: 400), layer: 24, processID: 12)
+            let app = MouseAppExceptionSupport.Window(
+                frame: CGRect(x: 0, y: 0, width: 400, height: 400), layer: 0, processID: 5)
+
+            /// A fresh instance per case, so no answer is served from the last one.
+            func excluded(_ list: [String], _ windows: [MouseAppExceptionSupport.Window],
+                          action: Bool = false) -> (verdict: Bool, lookups: Int) {
+                var arguments = savedArguments
+                for scope in MouseExceptionScope.allCases { arguments[scope.defaultsKey] = list }
+                defaults.setVolatileDomain(arguments, forName: UserDefaults.argumentDomain)
+                var lookups = 0
+                let exceptions = MouseAppExceptions(
+                    uptime: PointerInputTestClock().read,
+                    onScreenWindows: { lookups += 1; return windows },
+                    identitiesForProcess: { identities[$0].map { [$0] } ?? [] })
+                let verdict = action
+                    ? exceptions.excludesActionTarget(.buttonShortcuts, at: point)
+                    : exceptions.excludesPointerTarget(.smoothScroll, at: point)
+                return (verdict, lookups)
+            }
+            suite.expect(excluded(["com.apple.dock"], [dock]).verdict
+                    && excluded(["com.apple.launchpad.launcher"], [dock]).verdict,
+                   "a listed Dock or Launchpad stands the wheel down over the Launchpad surface")
+            suite.expect(excluded(["com.apple.dock"], [dock], action: true).verdict,
+                   "the button-shortcut lookup uses the same surface")
+            suite.expect(!excluded(["com.example.other"], [dock]).verdict,
+                   "an unlisted surface leaves the feature running")
+            suite.expect(!excluded(["com.apple.dock"], [dock, app]).verdict
+                    && !excluded(["com.apple.dock"], [app, dock]).verdict,
+                   "an app window under the pointer keeps answering whatever order the surface is in")
+            suite.expect(excluded(["com.example.modeler"], [dock, app]).verdict,
+                   "the app window's own entry still matches under a Dock surface")
+            suite.expect(!excluded(["com.apple.dock"], [overlay]).verdict
+                    && excluded(["com.example.overlay"], [overlay]).verdict,
+                   "another owner above the app band matches only by its own identity")
+            let empty = excluded([], [dock])
+            suite.expect(!empty.verdict && empty.lookups == 0,
+                   "an empty list stands nothing down and never asks the window server")
         }
 
         for language in AppLanguage.allCases {
