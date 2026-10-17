@@ -15,7 +15,9 @@ import CoreGraphics
 ///
 /// The app is resolved from the window under the pointer, which is where
 /// macOS delivers both the wheel and the click, and falls back to the app in
-/// front when the pointer is over no window of its own. Resolving asks the
+/// front when the pointer is over no window of its own. A surface, a window
+/// above the app band that takes the event there such as Launchpad, a menu or
+/// a banner, answers in place of the app window it covers. Resolving asks the
 /// window server, so the answer is cached until the pointer leaves that
 /// window; with every list empty, which is the normal case, nothing is
 /// resolved at all and the taps cost exactly what they always did.
@@ -53,9 +55,6 @@ final class MouseAppExceptions: ObservableObject {
     /// from (nil when the pointer was over nothing), where the pointer was and
     /// when.
     private var cachedIdentities: [String] = []
-    /// The owner of the system surface under the pointer when no app window
-    /// was there (Launchpad, the Dock; issue #3135), else empty.
-    private var cachedSurfaceIdentities: [String] = []
     private var cachedRegion: CGRect?
     private var cachedPoint: CGPoint = .zero
     private var cachedAt: TimeInterval = -1
@@ -64,13 +63,16 @@ final class MouseAppExceptions: ObservableObject {
     private static let ownProcessID = Int32(getpid())
     private let uptime: () -> TimeInterval
     private let onScreenWindows: () -> [MouseAppExceptionSupport.Window]
+    private let receivingWindow: (CGPoint) -> CGWindowID?
     private let identitiesForProcess: ((Int32) -> [String])?
 
     init(uptime: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          onScreenWindows: @escaping () -> [MouseAppExceptionSupport.Window] = WindowServerSupport.onScreenWindows,
+         receivingWindow: @escaping (CGPoint) -> CGWindowID? = WindowServerSupport.receivingWindow(at:),
          identitiesForProcess: ((Int32) -> [String])? = nil) {
         self.uptime = uptime
         self.onScreenWindows = onScreenWindows
+        self.receivingWindow = receivingWindow
         self.identitiesForProcess = identitiesForProcess
         reload()
     }
@@ -144,9 +146,7 @@ final class MouseAppExceptions: ObservableObject {
         // An app cannot be told apart from a listed one while it is unknown,
         // and a list exists to keep hands off, so hands stay off.
         guard answer.known else { return true }
-        return MouseAppExceptionSupport.isPointerTargetExcepted(appIdentities: answer.identities,
-                                                                surfaceIdentities: answer.surface,
-                                                                exceptions: exceptions)
+        return MouseAppExceptionSupport.isExcepted(answer.identities, exceptions: exceptions)
     }
 
     /// True when the app under the pointer or the app in front is on this
@@ -165,9 +165,7 @@ final class MouseAppExceptions: ObservableObject {
         }
         let answer = pointerIdentity(at: point)
         guard answer.known else { return true }
-        if MouseAppExceptionSupport.isPointerTargetExcepted(appIdentities: answer.identities,
-                                                            surfaceIdentities: answer.surface,
-                                                            exceptions: exceptions) {
+        if MouseAppExceptionSupport.isExcepted(answer.identities, exceptions: exceptions) {
             return true
         }
         let frontmost = Self.onMain { identities(for: NSWorkspace.shared.frontmostApplication) }
@@ -257,11 +255,10 @@ final class MouseAppExceptions: ObservableObject {
     // MARK: - Resolving
 
     /// What the app that owns the window under the pointer answers to, falling
-    /// back to the app in front when the pointer is over none. `known` is false
-    /// only on the pointer thread, which never waits for the main one. `surface`
-    /// names the owner of a system surface under the pointer when no app window
-    /// is there, and is only ever an extra way to match the list.
-    private func pointerIdentity(at point: CGPoint) -> (known: Bool, identities: [String], surface: [String]) {
+    /// back to the app in front when the pointer is over none. A surface that
+    /// takes the event there answers in place of both. `known` is false only
+    /// on the pointer thread, which never waits for the main one.
+    private func pointerIdentity(at point: CGPoint) -> (known: Bool, identities: [String]) {
         let now = uptime()
         // The pointer thread must return even while the main thread is busy.
         // An answer that aged out still names the window it came from, so the
@@ -269,8 +266,8 @@ final class MouseAppExceptions: ObservableObject {
         // belongs to another window and is no answer at all.
         let isMainThread = Thread.isMainThread
         var needsRefresh = false
-        let answer = lock.withLock { () -> (settled: Bool, known: Bool, identities: [String], surface: [String]) in
-            guard !allEmpty else { return (true, true, [], []) }
+        let answer = lock.withLock { () -> (settled: Bool, known: Bool, identities: [String]) in
+            guard !allEmpty else { return (true, true, []) }
             guard MouseAppExceptionSupport.cacheHolds(region: cachedRegion,
                                                       resolvedPoint: cachedPoint,
                                                       resolvedAt: cachedAt,
@@ -281,13 +278,11 @@ final class MouseAppExceptions: ObservableObject {
                     if needsRefresh { pointerRefreshScheduled = true }
                     let sameWindow = MouseAppExceptionSupport.cacheNamesWindow(region: cachedRegion,
                                                                               point: point)
-                    return (true, sameWindow,
-                            sameWindow ? cachedIdentities : [],
-                            sameWindow ? cachedSurfaceIdentities : [])
+                    return (true, sameWindow, sameWindow ? cachedIdentities : [])
                 }
-                return (false, true, [], [])
+                return (false, true, [])
             }
-            return (true, true, cachedIdentities, cachedSurfaceIdentities)
+            return (true, true, cachedIdentities)
         }
         if needsRefresh {
             DispatchQueue.main.async { [weak self] in
@@ -296,26 +291,43 @@ final class MouseAppExceptions: ObservableObject {
                 _ = self.pointerIdentity(at: point)
             }
         }
-        if answer.settled { return (answer.known, answer.identities, answer.surface) }
+        if answer.settled { return (answer.known, answer.identities) }
 
         let windows = onScreenWindows()
-        let window = MouseAppExceptionSupport.pointerWindow(in: windows,
-                                                            at: point,
-                                                            ownProcessID: Self.ownProcessID)
         let surface = MouseAppExceptionSupport.pointerSurface(in: windows,
-                                                              at: point,
+                                                              receivingWindowID: receivingWindow(point),
                                                               ownProcessID: Self.ownProcessID)
-        let surfaceIdentities = surface.map { identities(forProcess: $0.processID) } ?? []
-        let resolved = window.map { identities(forProcess: $0.processID) }
-            ?? identities(for: NSWorkspace.shared.frontmostApplication)
+        // A surface no app owns, such as the menu bar the window server draws
+        // for the app in front, names nobody, so the usual answer stands.
+        let surfaceIdentities = surface.map {
+            MouseAppExceptionSupport.surfaceIdentities(identities(forProcess: $0.processID))
+        } ?? []
+        let resolved: [String]
+        let region: CGRect?
+        if let surface, !surfaceIdentities.isEmpty {
+            // A surface may take less than its rectangle: the Dock's spans the
+            // screen and takes events over the Dock only. One that also takes
+            // them at its center, as Launchpad and menus do, is taken to fill
+            // its rectangle and is cached like a window; any other answers for
+            // its exact spot only, like an answer of nothing.
+            resolved = surfaceIdentities
+            let center = CGPoint(x: surface.frame.midX, y: surface.frame.midY)
+            region = receivingWindow(center) == surface.number ? surface.frame : nil
+        } else {
+            let window = MouseAppExceptionSupport.pointerWindow(in: windows,
+                                                                at: point,
+                                                                ownProcessID: Self.ownProcessID)
+            resolved = window.map { identities(forProcess: $0.processID) }
+                ?? identities(for: NSWorkspace.shared.frontmostApplication)
+            region = window?.frame
+        }
         lock.withLock {
             cachedIdentities = resolved
-            cachedSurfaceIdentities = surfaceIdentities
-            cachedRegion = window?.frame
+            cachedRegion = region
             cachedPoint = point
             cachedAt = now
         }
-        return (true, resolved, surfaceIdentities)
+        return (true, resolved)
     }
 
     /// While a list names a program by its path, a program answers to the
@@ -337,7 +349,6 @@ final class MouseAppExceptions: ObservableObject {
     private func invalidateCache() {
         lock.withLock {
             cachedIdentities = []
-            cachedSurfaceIdentities = []
             cachedRegion = nil
             cachedAt = -1
         }
